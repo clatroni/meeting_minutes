@@ -1,8 +1,14 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { SAMPLE_TRANSCRIPTS } from "@/lib/samples";
+import { MOM_RULES } from "@/lib/rules";
+import { detectLanguage } from "@/lib/lang";
 import type { MoM } from "@/lib/types";
+
+type Tone = "executive" | "detailed" | "casual";
+
+type Staged = { text: string; sourceLabel: string };
 
 const PIPELINE_STEPS_SINGLE = [
   { label: "Reading transcript" },
@@ -18,19 +24,20 @@ const PIPELINE_STEPS_REVIEW = [
   { label: "Finalising" },
 ];
 
-type Tone = "executive" | "detailed" | "casual";
-
 export default function Home() {
+  const [staged, setStaged] = useState<Staged | null>(null);
   const [busy, setBusy] = useState(false);
+  const [parsing, setParsing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mom, setMom] = useState<MoM | null>(null);
   const [step, setStep] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [tone, setTone] = useState<Tone>("executive");
   const [review, setReview] = useState(false);
+  const [showRules, setShowRules] = useState(false);
+  const [showTemplate, setShowTemplate] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  // Animate pipeline steps while busy (visual feedback; the real work is one or two API calls)
   useEffect(() => {
     if (!busy) { setStep(0); return; }
     const timings = review ? [600, 6000, 18000, 32000] : [800, 6000, 14000];
@@ -38,74 +45,112 @@ export default function Home() {
     return () => timers.forEach(clearTimeout);
   }, [busy, review]);
 
-  async function processFile(file: File) {
-    setBusy(true); setError(null); setMom(null);
+  const lang = useMemo(() => staged ? detectLanguage(staged.text) : null, [staged]);
+
+  async function stageFile(file: File) {
+    setParsing(true); setError(null); setMom(null); setStaged(null);
     try {
       const fd = new FormData();
       fd.append("file", file);
-      fd.append("tone", tone);
-      fd.append("review", String(review));
-      const res = await fetch("/api/process", { method: "POST", body: fd });
+      const res = await fetch("/api/parse", { method: "POST", body: fd });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Request failed");
-      setMom(data.mom);
+      if (!res.ok) throw new Error(data.error || "Parse failed");
+      setStaged({ text: data.text, sourceLabel: data.sourceLabel });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Unknown error");
-    } finally { setBusy(false); }
+      setError(e instanceof Error ? e.message : "Parse failed");
+    } finally {
+      setParsing(false);
+    }
   }
 
-  async function processSample(key: string) {
-    setBusy(true); setError(null); setMom(null);
+  function stageSample(key: string) {
+    const sample = SAMPLE_TRANSCRIPTS[key];
+    setError(null); setMom(null);
+    setStaged({ text: sample.text, sourceLabel: sample.label });
+  }
+
+  async function generate() {
+    if (!staged) return;
+    setBusy(true); setError(null);
     try {
       const res = await fetch("/api/process", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: SAMPLE_TRANSCRIPTS[key].text, tone, review }),
+        body: JSON.stringify({ text: staged.text, tone, review }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Request failed");
       setMom(data.mom);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unknown error");
-    } finally { setBusy(false); }
+    } finally {
+      setBusy(false);
+    }
   }
 
   function onDrop(e: React.DragEvent) {
     e.preventDefault(); setDragging(false);
     const file = e.dataTransfer.files?.[0];
-    if (file) processFile(file);
+    if (file) stageFile(file);
   }
+
+  function reset() {
+    setStaged(null); setMom(null); setError(null);
+  }
+
+  const showLanding = !staged && !busy && !mom;
+  const showStaged = staged && !busy && !mom;
 
   return (
     <>
       <main className="w-full max-w-5xl mx-auto px-6 pt-16 pb-24">
         <Hero />
 
-        {!mom && !busy && (
+        {showLanding && (
           <>
             <HowItWorks />
             <OutputChips />
-            <Settings tone={tone} setTone={setTone} review={review} setReview={setReview} />
+            <Settings
+              tone={tone} setTone={setTone}
+              review={review} setReview={setReview}
+              onShowRules={() => setShowRules(true)}
+              onShowTemplate={() => setShowTemplate(true)}
+            />
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6 fade-up">
-            <Dropzone
-              dragging={dragging}
-              setDragging={setDragging}
-              onDrop={onDrop}
-              onPick={() => fileRef.current?.click()}
-            />
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".docx,.txt"
-              className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) processFile(f);
-              }}
-            />
-            <SampleCards onPick={processSample} />
+              <Dropzone
+                dragging={dragging}
+                setDragging={setDragging}
+                onDrop={onDrop}
+                onPick={() => fileRef.current?.click()}
+                parsing={parsing}
+              />
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".docx,.txt"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) stageFile(f);
+                }}
+              />
+              <SampleCards onPick={stageSample} />
             </div>
           </>
+        )}
+
+        {showStaged && staged && lang && (
+          <StagedPreview
+            staged={staged}
+            lang={lang}
+            onChange={(text) => setStaged({ ...staged, text })}
+            tone={tone} setTone={setTone}
+            review={review} setReview={setReview}
+            onShowRules={() => setShowRules(true)}
+            onShowTemplate={() => setShowTemplate(true)}
+            onCancel={reset}
+            onGenerate={generate}
+          />
         )}
 
         {busy && <Processing step={step} review={review} />}
@@ -116,9 +161,22 @@ export default function Home() {
           </div>
         )}
 
-        {mom && <ResultView mom={mom} onReset={() => setMom(null)} />}
+        {mom && <ResultView mom={mom} onReset={reset} />}
       </main>
       <Footer />
+
+      {showRules && <Modal title="Writing rules (the prompt Claude reads)" onClose={() => setShowRules(false)}>
+        <pre className="whitespace-pre-wrap text-sm text-ink/80 leading-relaxed mono">{MOM_RULES}</pre>
+        <div className="mt-6 text-xs text-ink/55 bg-paper rounded-[var(--radius-sm)] p-4">
+          On the local Streamlit tool these rules live in <span className="mono">input/Rules.docx</span> and can be
+          edited in Word without touching code. In this Vercel build they are embedded as a TypeScript
+          constant in <span className="mono">lib/rules.ts</span> — editing requires a redeploy.
+        </div>
+      </Modal>}
+
+      {showTemplate && <Modal title="Output template (Word .docx structure)" onClose={() => setShowTemplate(false)}>
+        <TemplatePreview />
+      </Modal>}
     </>
   );
 }
@@ -195,29 +253,75 @@ function OutputChips() {
   );
 }
 
-function Dropzone({ dragging, setDragging, onDrop, onPick }:
+function Settings({ tone, setTone, review, setReview, onShowRules, onShowTemplate }: {
+  tone: Tone; setTone: (t: Tone) => void;
+  review: boolean; setReview: (b: boolean) => void;
+  onShowRules: () => void; onShowTemplate: () => void;
+}) {
+  return (
+    <div className="mt-8 bg-white rounded-[var(--radius-lg)] shadow-[var(--shadow-sm)] px-6 py-4 flex flex-wrap items-center gap-x-6 gap-y-3 fade-up">
+      <div className="flex items-center gap-3">
+        <span className="text-[11px] uppercase tracking-widest text-ink/50 font-medium">Tone</span>
+        <div className="inline-flex rounded-full bg-paper p-1">
+          {(["executive", "detailed", "casual"] as Tone[]).map(t => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setTone(t)}
+              className={`text-xs px-3 py-1.5 rounded-full transition-colors capitalize ${
+                tone === t ? "bg-ink text-white" : "text-ink/65 hover:text-ink"
+              }`}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <label className="flex items-center gap-3 cursor-pointer">
+        <span className="text-[11px] uppercase tracking-widest text-ink/50 font-medium">Review pass</span>
+        <button
+          type="button"
+          onClick={() => setReview(!review)}
+          className={`relative w-11 h-6 rounded-full transition-colors ${review ? "bg-green" : "bg-ink/15"}`}
+          aria-pressed={review}
+          title="Second Claude pass auditing the extraction — ~30s extra. Catches missed actions, mis-classified statuses."
+        >
+          <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-transform ${review ? "translate-x-5" : "translate-x-0.5"}`} />
+        </button>
+      </label>
+
+      <div className="flex items-center gap-2 ml-auto">
+        <button onClick={onShowRules} className="text-xs px-3 py-1.5 rounded-full bg-paper hover:bg-green-l transition-colors">📖 Rules</button>
+        <button onClick={onShowTemplate} className="text-xs px-3 py-1.5 rounded-full bg-paper hover:bg-green-l transition-colors">📄 Template</button>
+      </div>
+    </div>
+  );
+}
+
+function Dropzone({ dragging, setDragging, onDrop, onPick, parsing }:
   { dragging: boolean; setDragging: (b: boolean) => void;
-    onDrop: (e: React.DragEvent) => void; onPick: () => void; }) {
+    onDrop: (e: React.DragEvent) => void; onPick: () => void; parsing: boolean; }) {
   return (
     <div
-      onClick={onPick}
+      onClick={parsing ? undefined : onPick}
       onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
       onDragLeave={() => setDragging(false)}
       onDrop={onDrop}
       className={`dropzone ${dragging ? "dragging" : ""} bg-white rounded-[var(--radius-lg)] shadow-[var(--shadow-md)]
-                  p-10 cursor-pointer flex flex-col items-center justify-center text-center min-h-[260px]`}
+                  p-10 cursor-pointer flex flex-col items-center justify-center text-center min-h-[260px]
+                  ${parsing ? "opacity-60 cursor-wait" : ""}`}
     >
       <div className="w-14 h-14 rounded-full bg-green-l flex items-center justify-center mb-4 text-green text-2xl">
-        ↑
+        {parsing ? <span className="spinner"></span> : "↑"}
       </div>
-      <div className="display text-2xl mb-1">Drop a transcript</div>
+      <div className="display text-2xl mb-1">{parsing ? "Reading the file…" : "Drop a transcript"}</div>
       <div className="text-sm text-ink/55 mb-4">.docx (Teams export) · .txt</div>
-      <button
-        type="button"
-        className="px-5 py-2 rounded-full bg-ink text-paper text-sm font-medium hover:bg-green hover:text-white transition-colors"
-      >
-        or browse files →
-      </button>
+      {!parsing && (
+        <button type="button" className="px-5 py-2 rounded-full bg-ink text-paper text-sm font-medium hover:bg-green hover:text-white transition-colors">
+          or browse files →
+        </button>
+      )}
     </div>
   );
 }
@@ -249,6 +353,79 @@ function SampleCards({ onPick }: { onPick: (key: string) => void }) {
   );
 }
 
+function StagedPreview({ staged, lang, onChange, tone, setTone, review, setReview,
+                       onShowRules, onShowTemplate, onCancel, onGenerate }: {
+  staged: Staged;
+  lang: ReturnType<typeof detectLanguage>;
+  onChange: (text: string) => void;
+  tone: Tone; setTone: (t: Tone) => void;
+  review: boolean; setReview: (b: boolean) => void;
+  onShowRules: () => void; onShowTemplate: () => void;
+  onCancel: () => void; onGenerate: () => void;
+}) {
+  const lines = staged.text.split("\n").length;
+  const chars = staged.text.length;
+  return (
+    <div className="mt-8 space-y-4 fade-up">
+      <div className="bg-white rounded-[var(--radius-lg)] shadow-[var(--shadow-md)] p-6">
+        <div className="flex items-center justify-between gap-4 mb-4 flex-wrap">
+          <div>
+            <div className="text-[11px] uppercase tracking-widest text-ink/40 font-medium mb-1">Step 1 of 2 · Review the transcript</div>
+            <div className="display text-2xl">{staged.sourceLabel}</div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs px-3 py-1.5 rounded-full bg-green-l text-green-d flex items-center gap-1.5">
+              <span aria-hidden>{lang.flag}</span> {lang.label}
+            </span>
+            <span className="text-xs px-3 py-1.5 rounded-full bg-paper mono">{lines} lines · {chars} chars</span>
+          </div>
+        </div>
+
+        <label className="block text-xs uppercase tracking-widest text-ink/40 font-medium mb-2">Edit before sending to Claude</label>
+        <textarea
+          value={staged.text}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-full min-h-[260px] max-h-[480px] p-4 rounded-[var(--radius-md)] bg-paper border-0 mono text-[13px] leading-relaxed resize-y focus:outline-none focus:ring-2 focus:ring-green/40"
+          spellCheck={false}
+        />
+        <div className="mt-2 text-[11px] text-ink/50">Edits are kept client-side and applied when you click Generate.</div>
+      </div>
+
+      <div className="bg-white rounded-[var(--radius-lg)] shadow-[var(--shadow-sm)] px-6 py-4 flex flex-wrap items-center gap-x-6 gap-y-3">
+        <div className="flex items-center gap-3">
+          <span className="text-[11px] uppercase tracking-widest text-ink/50 font-medium">Tone</span>
+          <div className="inline-flex rounded-full bg-paper p-1">
+            {(["executive", "detailed", "casual"] as Tone[]).map(t => (
+              <button key={t} type="button" onClick={() => setTone(t)}
+                className={`text-xs px-3 py-1.5 rounded-full transition-colors capitalize ${tone === t ? "bg-ink text-white" : "text-ink/65 hover:text-ink"}`}>
+                {t}
+              </button>
+            ))}
+          </div>
+        </div>
+        <label className="flex items-center gap-3 cursor-pointer">
+          <span className="text-[11px] uppercase tracking-widest text-ink/50 font-medium">Review pass</span>
+          <button type="button" onClick={() => setReview(!review)}
+            className={`relative w-11 h-6 rounded-full transition-colors ${review ? "bg-green" : "bg-ink/15"}`}
+            aria-pressed={review}>
+            <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-transform ${review ? "translate-x-5" : "translate-x-0.5"}`} />
+          </button>
+        </label>
+        <div className="flex items-center gap-2">
+          <button onClick={onShowRules} className="text-xs px-3 py-1.5 rounded-full bg-paper hover:bg-green-l transition-colors">📖 Rules</button>
+          <button onClick={onShowTemplate} className="text-xs px-3 py-1.5 rounded-full bg-paper hover:bg-green-l transition-colors">📄 Template</button>
+        </div>
+        <div className="flex items-center gap-2 ml-auto">
+          <button onClick={onCancel} className="text-sm px-4 py-2 rounded-full bg-white hover:bg-ink hover:text-paper transition-colors">Cancel</button>
+          <button onClick={onGenerate} className="text-sm px-5 py-2 rounded-full bg-green text-white hover:bg-green-d transition-colors font-medium">
+            Generate MoM →
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Processing({ step, review }: { step: number; review: boolean }) {
   const steps = review ? PIPELINE_STEPS_REVIEW : PIPELINE_STEPS_SINGLE;
   return (
@@ -270,9 +447,7 @@ function Processing({ step, review }: { step: number; review: boolean }) {
               }>
                 {state === "done" ? "✓" : i + 1}
               </div>
-              <span className={
-                "text-sm " + (state === "wait" ? "text-ink/40" : "text-ink")
-              }>{s.label}</span>
+              <span className={"text-sm " + (state === "wait" ? "text-ink/40" : "text-ink")}>{s.label}</span>
             </li>
           );
         })}
@@ -285,45 +460,6 @@ function Processing({ step, review }: { step: number; review: boolean }) {
   );
 }
 
-function Settings({ tone, setTone, review, setReview }: {
-  tone: Tone; setTone: (t: Tone) => void;
-  review: boolean; setReview: (b: boolean) => void;
-}) {
-  return (
-    <div className="mt-10 bg-white rounded-[var(--radius-lg)] shadow-[var(--shadow-sm)] px-6 py-4 flex flex-wrap items-center gap-6 fade-up">
-      <div className="flex items-center gap-3">
-        <span className="text-[11px] uppercase tracking-widest text-ink/50 font-medium">Tone</span>
-        <div className="inline-flex rounded-full bg-paper p-1">
-          {(["executive", "detailed", "casual"] as Tone[]).map(t => (
-            <button
-              key={t}
-              type="button"
-              onClick={() => setTone(t)}
-              className={`text-xs px-3 py-1.5 rounded-full transition-colors capitalize ${
-                tone === t ? "bg-ink text-white" : "text-ink/65 hover:text-ink"
-              }`}
-            >
-              {t}
-            </button>
-          ))}
-        </div>
-      </div>
-      <label className="flex items-center gap-3 cursor-pointer ml-auto">
-        <span className="text-[11px] uppercase tracking-widest text-ink/50 font-medium">Review pass</span>
-        <button
-          type="button"
-          onClick={() => setReview(!review)}
-          className={`relative w-11 h-6 rounded-full transition-colors ${review ? "bg-green" : "bg-ink/15"}`}
-          aria-pressed={review}
-          title="Add a second Claude pass that audits the extraction for missed actions, mis-classified statuses, and pleasantries. Costs +1 LLM call (~30s extra)."
-        >
-          <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-transform ${review ? "translate-x-5" : "translate-x-0.5"}`} />
-        </button>
-      </label>
-    </div>
-  );
-}
-
 function ResultView({ mom, onReset }: { mom: MoM; onReset: () => void }) {
   const [downloading, setDownloading] = useState(false);
   const info = mom.meeting_info;
@@ -332,8 +468,7 @@ function ResultView({ mom, onReset }: { mom: MoM; onReset: () => void }) {
     setDownloading(true);
     try {
       const res = await fetch("/api/render-docx", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mom }),
       });
       if (!res.ok) {
@@ -346,15 +481,11 @@ function ResultView({ mom, onReset }: { mom: MoM; onReset: () => void }) {
       a.href = url;
       const slug = (info.title || "MoM").replace(/[^A-Za-z0-9-_]+/g, "_").slice(0, 60);
       a.download = `${info.date || "MoM"}_${slug}_MoM.docx`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+      document.body.appendChild(a); a.click(); a.remove();
       URL.revokeObjectURL(url);
     } catch (e) {
       alert(e instanceof Error ? e.message : "Download failed");
-    } finally {
-      setDownloading(false);
-    }
+    } finally { setDownloading(false); }
   }
 
   return (
@@ -362,19 +493,11 @@ function ResultView({ mom, onReset }: { mom: MoM; onReset: () => void }) {
       <div className="flex items-center justify-between mb-2 gap-3">
         <div className="text-xs text-ink/50 mono uppercase tracking-widest">Generated {new Date().toLocaleString()}</div>
         <div className="flex gap-2">
-          <button
-            onClick={downloadDocx}
-            disabled={downloading}
-            className="text-sm px-5 py-2 rounded-full bg-green text-white hover:bg-green-d transition-colors disabled:opacity-60 flex items-center gap-2"
-          >
+          <button onClick={downloadDocx} disabled={downloading}
+            className="text-sm px-5 py-2 rounded-full bg-green text-white hover:bg-green-d transition-colors disabled:opacity-60 flex items-center gap-2">
             {downloading ? <><span className="spinner !w-3.5 !h-3.5 !border-white/30 !border-t-white"></span> Building Word…</> : <>↓ Download .docx</>}
           </button>
-          <button
-            onClick={onReset}
-            className="text-sm px-4 py-2 rounded-full bg-white hover:bg-ink hover:text-paper transition-colors"
-          >
-            ↻ New
-          </button>
+          <button onClick={onReset} className="text-sm px-4 py-2 rounded-full bg-white hover:bg-ink hover:text-paper transition-colors">↻ New</button>
         </div>
       </div>
 
@@ -396,9 +519,7 @@ function ResultView({ mom, onReset }: { mom: MoM; onReset: () => void }) {
         </div>
       </section>
 
-      <SectionCard title="Executive summary">
-        <p className="leading-relaxed text-[15px]">{mom.executive_summary}</p>
-      </SectionCard>
+      <SectionCard title="Executive summary"><p className="leading-relaxed text-[15px]">{mom.executive_summary}</p></SectionCard>
 
       {mom.discussion_topics?.length > 0 && (
         <SectionCard title={`Topics discussed · ${mom.discussion_topics.length}`}>
@@ -462,9 +583,7 @@ function ResultView({ mom, onReset }: { mom: MoM; onReset: () => void }) {
             {mom.risks_issues.map((r, i) => (
               <li key={i} className="flex gap-4">
                 <span className={`text-[11px] px-2.5 py-1 rounded-full shrink-0 h-fit uppercase tracking-wider whitespace-nowrap
-                  ${r.type === "Risk" ? "bg-amber-l text-amber" : "bg-red-l text-red"}`}>
-                  {r.type} · {r.impact}
-                </span>
+                  ${r.type === "Risk" ? "bg-amber-l text-amber" : "bg-red-l text-red"}`}>{r.type} · {r.impact}</span>
                 <div className="flex-1">
                   <div className="text-[15px] leading-relaxed">{r.description}</div>
                   {r.owner && <div className="text-xs text-ink/50 mono mt-1">Owner · {r.owner}</div>}
@@ -509,9 +628,7 @@ function SectionCard({ title, children }: { title: string; children: React.React
 }
 
 function PriorityBadge({ p }: { p: "High" | "Medium" | "Low" }) {
-  const cls = p === "High" ? "bg-red-l text-red"
-    : p === "Medium" ? "bg-amber-l text-amber"
-    : "bg-paper text-ink/55";
+  const cls = p === "High" ? "bg-red-l text-red" : p === "Medium" ? "bg-amber-l text-amber" : "bg-paper text-ink/55";
   return <span className={`text-[11px] px-2 py-1 rounded-full uppercase tracking-wider ${cls}`}>{p}</span>;
 }
 
@@ -520,6 +637,67 @@ function StatusBadge({ s }: { s: "Not Started" | "In Progress" | "Completed" }) 
     : s === "In Progress" ? "bg-blue-l text-blue"
     : "bg-paper text-ink/55";
   return <span className={`text-[11px] px-2 py-1 rounded-full uppercase tracking-wider whitespace-nowrap ${cls}`}>{s}</span>;
+}
+
+function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) { if (e.key === "Escape") onClose(); }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div className="fixed inset-0 z-50 bg-ink/40 backdrop-blur-sm flex items-center justify-center p-4 fade-up"
+         onClick={onClose}>
+      <div className="bg-white rounded-[var(--radius-lg)] shadow-[var(--shadow-lg)] max-w-3xl w-full max-h-[85vh] overflow-y-auto"
+           onClick={(e) => e.stopPropagation()}>
+        <div className="sticky top-0 bg-white border-b border-paper px-6 py-4 flex items-center justify-between rounded-t-[var(--radius-lg)]">
+          <h3 className="display text-2xl">{title}</h3>
+          <button onClick={onClose} className="w-8 h-8 rounded-full bg-paper hover:bg-ink hover:text-paper transition-colors flex items-center justify-center">✕</button>
+        </div>
+        <div className="p-6">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function TemplatePreview() {
+  const sections = [
+    { name: "Title block", detail: "Meeting title in Georgia 22pt + date · duration · client (DM Mono small caps)" },
+    { name: "Participants", detail: "'Participants:' bold prefix + 'Name (Role)' comma-separated" },
+    { name: "Executive summary", detail: "Green-rule heading, then 4–8 prose sentences (Calibri 11)" },
+    { name: "Topics discussed", detail: "Bulleted list — bold topic title em-dash summary" },
+    { name: "Decisions", detail: "Bulleted — bold decision em-dash rationale (italic) + owner in parentheses" },
+    { name: "Action items (table)", detail: "4 columns: Action · Owner · Due · Priority · Status. Header row dark ink + white text. Priority/Status cells shaded by value." },
+    { name: "Risks & issues (table)", detail: "Type · Description · Impact · Owner. Type cell shaded by Risk (amber) vs Issue (red)." },
+    { name: "Timeline", detail: "Bulleted milestones — bold name em-dash date" },
+    { name: "Open questions", detail: "Bulleted list" },
+    { name: "Footer", detail: "Italic centred · 'Strictly Private & Confidential · Deloitte'" },
+  ];
+  return (
+    <div>
+      <p className="text-sm text-ink/70 mb-5">
+        The downloaded Word file follows this structure. Section ordering and styling match a typical
+        Deloitte client-facing MoM. Empty sections are omitted automatically.
+      </p>
+      <ol className="space-y-3">
+        {sections.map((s, i) => (
+          <li key={i} className="flex gap-3 text-sm">
+            <span className="w-6 h-6 rounded-full bg-green-l text-green-d text-xs font-medium flex items-center justify-center shrink-0">{i + 1}</span>
+            <div>
+              <div className="font-medium">{s.name}</div>
+              <div className="text-ink/65 text-xs leading-relaxed">{s.detail}</div>
+            </div>
+          </li>
+        ))}
+      </ol>
+      <div className="mt-6 text-xs text-ink/55 bg-paper rounded-[var(--radius-sm)] p-4">
+        Local Streamlit tool: the visual styling is inherited from <span className="mono">input/Template.docx</span>
+        — editable in Word (fonts, colours, header/footer).
+        Vercel build: styling is defined in <span className="mono">lib/docx-render.ts</span> using the docx npm
+        package — editing requires a redeploy.
+      </div>
+    </div>
+  );
 }
 
 function Footer() {
