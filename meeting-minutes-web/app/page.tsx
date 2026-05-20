@@ -110,7 +110,7 @@ function Hero() {
     <header className="text-center md:text-left">
       <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-ink text-paper text-[11px] uppercase tracking-[0.18em] mb-6">
         <span className="w-1.5 h-1.5 rounded-full bg-green"></span>
-        Deloitte · AI Prompting Lab
+        Deloitte
       </div>
       <h1 className="display text-5xl md:text-7xl leading-[1.05] text-ink mb-4">
         Teams transcript.<br />
@@ -413,7 +413,7 @@ function Footer() {
   return (
     <footer className="border-t border-ink/8 bg-white/60 backdrop-blur py-6 px-6 mt-auto">
       <div className="max-w-5xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-3 text-xs text-ink/55">
-        <div>Strictly Private &amp; Confidential · Deloitte AI Prompting Lab</div>
+        <div>Strictly Private &amp; Confidential · Deloitte</div>
         <div className="mono">Powered by Claude Sonnet 4.6 · Next.js on Vercel</div>
       </div>
     </footer>
