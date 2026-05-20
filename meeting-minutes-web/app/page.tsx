@@ -83,6 +83,8 @@ export default function Home() {
 
         {!mom && !busy && (
           <>
+            <HowItWorks />
+            <OutputChips />
             <Settings tone={tone} setTone={setTone} review={review} setReview={setReview} />
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6 fade-up">
             <Dropzone
@@ -129,15 +131,67 @@ function Hero() {
         Deloitte
       </div>
       <h1 className="display text-5xl md:text-7xl leading-[1.05] text-ink mb-4">
-        Teams transcript.<br />
-        <em className="text-green not-italic font-medium">Executive MoM.</em>
+        Your AI <em className="text-green not-italic font-medium">Meeting Scribe.</em>
       </h1>
-      <p className="text-lg text-ink/65 max-w-2xl leading-relaxed">
-        Drop a Microsoft Teams transcript. Claude reads it, applies the team's writing rules,
-        and returns clean Meeting Minutes — decisions, actions with owners and deadlines,
-        risks, and a download-ready Word document.
+      <p className="text-lg text-ink/65 max-w-2xl leading-relaxed mb-5">
+        Drop a Microsoft Teams transcript. Get an executive-grade Meeting Minutes record —
+        decisions, actions with owners and deadlines, risks, and a download-ready Word document.
       </p>
+      <div className="flex flex-wrap gap-2 text-xs text-ink/55 items-center">
+        <TrustChip>No login</TrustChip>
+        <span className="text-ink/20">·</span>
+        <TrustChip>Not stored</TrustChip>
+        <span className="text-ink/20">·</span>
+        <TrustChip>Done in ~30s</TrustChip>
+        <span className="text-ink/20">·</span>
+        <TrustChip>Powered by Claude</TrustChip>
+      </div>
     </header>
+  );
+}
+
+function TrustChip({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 text-ink/65">
+      <span className="w-1 h-1 rounded-full bg-green"></span>
+      {children}
+    </span>
+  );
+}
+
+function HowItWorks() {
+  const steps = [
+    { icon: "📄", title: "Upload", body: "Teams transcript export (.docx) or paste plain text." },
+    { icon: "🤖", title: "Claude reads", body: "Strips fillers, identifies speakers, maps commitments to owners." },
+    { icon: "📋", title: "MoM ready", body: "Decisions · actions · risks · timeline. One-click Word download." },
+  ];
+  return (
+    <section className="mt-8 grid grid-cols-1 sm:grid-cols-3 gap-3 fade-up">
+      {steps.map((s, i) => (
+        <div key={i} className="bg-white rounded-[var(--radius-md)] shadow-[var(--shadow-sm)] p-5 flex gap-3 items-start">
+          <div className="text-2xl shrink-0" aria-hidden>{s.icon}</div>
+          <div>
+            <div className="text-[11px] uppercase tracking-widest text-ink/40 font-medium mb-0.5">Step {i + 1}</div>
+            <div className="font-medium mb-1">{s.title}</div>
+            <div className="text-xs text-ink/60 leading-relaxed">{s.body}</div>
+          </div>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function OutputChips() {
+  const chips = ["Executive summary", "Decisions", "Action items", "Risks & issues", "Timeline", "Open questions", ".docx export"];
+  return (
+    <div className="mt-6 flex flex-wrap gap-2 fade-up">
+      <span className="text-[11px] uppercase tracking-widest text-ink/40 font-medium self-center pr-2">What you get</span>
+      {chips.map(c => (
+        <span key={c} className="text-xs bg-white px-3 py-1.5 rounded-full shadow-[var(--shadow-sm)]">
+          {c}
+        </span>
+      ))}
+    </div>
   );
 }
 
@@ -472,7 +526,13 @@ function Footer() {
   return (
     <footer className="border-t border-ink/8 bg-white/60 backdrop-blur py-6 px-6 mt-auto">
       <div className="max-w-5xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-3 text-xs text-ink/55">
-        <div>Strictly Private &amp; Confidential · Deloitte</div>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span>Strictly Private &amp; Confidential · Deloitte</span>
+          <span className="text-ink/20">·</span>
+          <span>Server-side Claude</span>
+          <span className="text-ink/20">·</span>
+          <span>No transcript retention</span>
+        </div>
         <div className="mono">Powered by Claude Sonnet 4.6 · Next.js on Vercel</div>
       </div>
     </footer>
