@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+.venv/
+*.egg-info/
+
+# Env files (NEVER commit secrets)
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Generated artifacts — per-run, may contain client data
+output/
+streamlit.log
+*.log
+
+# Stale input artifact
+input/Meeting Minutes Call_minutes.docx
+
+# One-off comparison driver (kept locally for A/B but not part of the product)
+_compare_review.py
