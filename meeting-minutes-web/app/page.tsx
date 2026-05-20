@@ -4,12 +4,21 @@ import { useState, useRef, useEffect } from "react";
 import { SAMPLE_TRANSCRIPTS } from "@/lib/samples";
 import type { MoM } from "@/lib/types";
 
-const PIPELINE_STEPS = [
+const PIPELINE_STEPS_SINGLE = [
   { label: "Reading transcript" },
   { label: "Normalising speakers" },
   { label: "Extracting decisions & actions" },
   { label: "Polishing for executive review" },
 ];
+const PIPELINE_STEPS_REVIEW = [
+  { label: "Reading transcript" },
+  { label: "First extraction pass" },
+  { label: "Quality review — fixing missed actions" },
+  { label: "Polishing for executive review" },
+  { label: "Finalising" },
+];
+
+type Tone = "executive" | "detailed" | "casual";
 
 export default function Home() {
   const [busy, setBusy] = useState(false);
@@ -17,21 +26,25 @@ export default function Home() {
   const [mom, setMom] = useState<MoM | null>(null);
   const [step, setStep] = useState(0);
   const [dragging, setDragging] = useState(false);
+  const [tone, setTone] = useState<Tone>("executive");
+  const [review, setReview] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  // Animate pipeline steps while busy (visual feedback; the real work is one API call)
+  // Animate pipeline steps while busy (visual feedback; the real work is one or two API calls)
   useEffect(() => {
     if (!busy) { setStep(0); return; }
-    const timings = [800, 6000, 12000];
+    const timings = review ? [600, 6000, 18000, 32000] : [800, 6000, 14000];
     const timers = timings.map((ms, i) => setTimeout(() => setStep(i + 1), ms));
     return () => timers.forEach(clearTimeout);
-  }, [busy]);
+  }, [busy, review]);
 
   async function processFile(file: File) {
     setBusy(true); setError(null); setMom(null);
     try {
       const fd = new FormData();
       fd.append("file", file);
+      fd.append("tone", tone);
+      fd.append("review", String(review));
       const res = await fetch("/api/process", { method: "POST", body: fd });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Request failed");
@@ -47,7 +60,7 @@ export default function Home() {
       const res = await fetch("/api/process", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: SAMPLE_TRANSCRIPTS[key].text }),
+        body: JSON.stringify({ text: SAMPLE_TRANSCRIPTS[key].text, tone, review }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Request failed");
@@ -69,7 +82,9 @@ export default function Home() {
         <Hero />
 
         {!mom && !busy && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-12 fade-up">
+          <>
+            <Settings tone={tone} setTone={setTone} review={review} setReview={setReview} />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6 fade-up">
             <Dropzone
               dragging={dragging}
               setDragging={setDragging}
@@ -87,10 +102,11 @@ export default function Home() {
               }}
             />
             <SampleCards onPick={processSample} />
-          </div>
+            </div>
+          </>
         )}
 
-        {busy && <Processing step={step} />}
+        {busy && <Processing step={step} review={review} />}
 
         {error && (
           <div className="bg-red-l text-red-d rounded-[var(--radius-md)] p-5 mt-8 fade-up">
@@ -179,7 +195,8 @@ function SampleCards({ onPick }: { onPick: (key: string) => void }) {
   );
 }
 
-function Processing({ step }: { step: number }) {
+function Processing({ step, review }: { step: number; review: boolean }) {
+  const steps = review ? PIPELINE_STEPS_REVIEW : PIPELINE_STEPS_SINGLE;
   return (
     <div className="bg-white rounded-[var(--radius-lg)] shadow-[var(--shadow-md)] p-10 mt-8 fade-up">
       <div className="flex items-center gap-3 mb-6">
@@ -187,7 +204,7 @@ function Processing({ step }: { step: number }) {
         <h2 className="display text-3xl">Generating MoM…</h2>
       </div>
       <ol className="space-y-3">
-        {PIPELINE_STEPS.map((s, i) => {
+        {steps.map((s, i) => {
           const state = i < step ? "done" : i === step ? "active" : "wait";
           return (
             <li key={i} className="flex items-center gap-4">
@@ -206,7 +223,49 @@ function Processing({ step }: { step: number }) {
           );
         })}
       </ol>
-      <p className="text-xs text-ink/50 mt-6">Typically 30–45 seconds. Powered by Claude Sonnet 4.6.</p>
+      <p className="text-xs text-ink/50 mt-6">
+        {review ? "Typically 50–80 seconds with review pass. " : "Typically 30–45 seconds. "}
+        Powered by Claude Sonnet 4.6.
+      </p>
+    </div>
+  );
+}
+
+function Settings({ tone, setTone, review, setReview }: {
+  tone: Tone; setTone: (t: Tone) => void;
+  review: boolean; setReview: (b: boolean) => void;
+}) {
+  return (
+    <div className="mt-10 bg-white rounded-[var(--radius-lg)] shadow-[var(--shadow-sm)] px-6 py-4 flex flex-wrap items-center gap-6 fade-up">
+      <div className="flex items-center gap-3">
+        <span className="text-[11px] uppercase tracking-widest text-ink/50 font-medium">Tone</span>
+        <div className="inline-flex rounded-full bg-paper p-1">
+          {(["executive", "detailed", "casual"] as Tone[]).map(t => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setTone(t)}
+              className={`text-xs px-3 py-1.5 rounded-full transition-colors capitalize ${
+                tone === t ? "bg-ink text-white" : "text-ink/65 hover:text-ink"
+              }`}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+      </div>
+      <label className="flex items-center gap-3 cursor-pointer ml-auto">
+        <span className="text-[11px] uppercase tracking-widest text-ink/50 font-medium">Review pass</span>
+        <button
+          type="button"
+          onClick={() => setReview(!review)}
+          className={`relative w-11 h-6 rounded-full transition-colors ${review ? "bg-green" : "bg-ink/15"}`}
+          aria-pressed={review}
+          title="Add a second Claude pass that audits the extraction for missed actions, mis-classified statuses, and pleasantries. Costs +1 LLM call (~30s extra)."
+        >
+          <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-transform ${review ? "translate-x-5" : "translate-x-0.5"}`} />
+        </button>
+      </label>
     </div>
   );
 }
