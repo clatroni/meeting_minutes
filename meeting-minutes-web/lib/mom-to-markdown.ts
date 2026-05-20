@@ -1,70 +1,60 @@
 import type { MoM } from "./types";
+import { DEFAULT_TEMPLATE, type SectionConfig, type SectionKey, titleFor, isEnabled } from "./template";
 
-export function momToMarkdown(mom: MoM): string {
+export function momToMarkdown(mom: MoM, template: SectionConfig[] = DEFAULT_TEMPLATE): string {
   const info = mom.meeting_info;
   const out: string[] = [];
 
   out.push(`# ${info.title || "Meeting Minutes"}`);
   const metaBits = [info.date, info.duration, info.client_name].filter(Boolean);
   if (metaBits.length) out.push("", `**${metaBits.join(" · ")}**`);
+  if (info.language) out.push(`*Language: ${info.language}*`);
   if (info.objective) out.push("", `_${info.objective}_`);
-
   if (info.participants?.length) {
     out.push("", "**Participants:** " + info.participants
       .map(p => p.role ? `${p.name} (${p.role})` : p.name).join(", "));
   }
 
-  if (mom.executive_summary) {
-    out.push("", "## Executive summary", "", mom.executive_summary);
-  }
+  // Iterate sections in template order
+  for (const section of template) {
+    if (!section.enabled) continue;
+    const key = section.key as SectionKey;
+    const title = section.title;
 
-  if (mom.discussion_topics?.length) {
-    out.push("", "## Topics discussed");
-    for (const t of mom.discussion_topics) {
-      out.push(`- **${t.title}** — ${t.summary}`);
-    }
-  }
-
-  if (mom.decisions_log?.length) {
-    out.push("", "## Decisions");
-    for (const d of mom.decisions_log) {
-      const bits: string[] = [`**${d.decision}**`];
-      if (d.rationale) bits.push(`_${d.rationale}_`);
-      if (d.owner) bits.push(`(Owner: ${d.owner})`);
-      out.push(`- ${bits.join(" — ")}`);
-    }
-  }
-
-  if (mom.action_items?.length) {
-    out.push("", "## Action items", "",
-      "| Action | Owner | Due | Priority | Status |",
-      "| --- | --- | --- | --- | --- |");
-    for (const a of mom.action_items) {
-      const cells = [a.action, a.owner || "TBD", a.due_date || "TBD", a.priority, a.status]
-        .map(c => String(c).replace(/\|/g, "\\|"));
-      out.push(`| ${cells.join(" | ")} |`);
-    }
-  }
-
-  if (mom.risks_issues?.length) {
-    out.push("", "## Risks & issues");
-    for (const r of mom.risks_issues) {
-      const owner = r.owner ? ` (Owner: ${r.owner})` : "";
-      out.push(`- **[${r.type} · ${r.impact}]** ${r.description}${owner}`);
-    }
-  }
-
-  if (mom.timeline?.length) {
-    out.push("", "## Timeline");
-    for (const t of mom.timeline) {
-      out.push(`- **${t.milestone}** — ${t.date}`);
-    }
-  }
-
-  if (mom.open_questions?.length) {
-    out.push("", "## Open questions");
-    for (const q of mom.open_questions) {
-      out.push(`- ${q}`);
+    if (key === "executive_summary" && mom.executive_summary) {
+      out.push("", `## ${title}`, "", mom.executive_summary);
+    } else if (key === "discussion_topics" && mom.discussion_topics?.length) {
+      out.push("", `## ${title}`);
+      for (const t of mom.discussion_topics) out.push(`- **${t.title}** — ${t.summary}`);
+    } else if (key === "decisions_log" && mom.decisions_log?.length) {
+      out.push("", `## ${title}`);
+      for (const d of mom.decisions_log) {
+        const bits: string[] = [`**${d.decision}**`];
+        if (d.rationale) bits.push(`_${d.rationale}_`);
+        if (d.owner) bits.push(`(Owner: ${d.owner})`);
+        out.push(`- ${bits.join(" — ")}`);
+      }
+    } else if (key === "action_items" && mom.action_items?.length) {
+      out.push("", `## ${title}`, "",
+        "| Action | Owner | Due | Priority | Status |",
+        "| --- | --- | --- | --- | --- |");
+      for (const a of mom.action_items) {
+        const cells = [a.action, a.owner || "TBD", a.due_date || "TBD", a.priority, a.status]
+          .map(c => String(c).replace(/\|/g, "\\|"));
+        out.push(`| ${cells.join(" | ")} |`);
+      }
+    } else if (key === "risks_issues" && mom.risks_issues?.length) {
+      out.push("", `## ${title}`);
+      for (const r of mom.risks_issues) {
+        const owner = r.owner ? ` (Owner: ${r.owner})` : "";
+        out.push(`- **[${r.type} · ${r.impact}]** ${r.description}${owner}`);
+      }
+    } else if (key === "timeline" && mom.timeline?.length) {
+      out.push("", `## ${title}`);
+      for (const t of mom.timeline) out.push(`- **${t.milestone}** — ${t.date}`);
+    } else if (key === "open_questions" && mom.open_questions?.length) {
+      out.push("", `## ${title}`);
+      for (const q of mom.open_questions) out.push(`- ${q}`);
     }
   }
 

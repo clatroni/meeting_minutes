@@ -5,11 +5,11 @@ export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
   try {
-    const { mom } = await req.json();
+    const { mom, template } = await req.json();
     if (!mom?.meeting_info) {
       return NextResponse.json({ error: "Missing or invalid `mom` in request body" }, { status: 400 });
     }
-    const buf = await renderDocx(mom);
+    const buf = await renderDocx(mom, template);
     return new NextResponse(buf as unknown as BodyInit, {
       status: 200,
       headers: {

@@ -165,7 +165,7 @@ Submit the CORRECTED minutes via the \`submit_minutes\` tool. Return the FULL JS
 
 export async function extractMinutes(
   transcript: string,
-  { tone = "executive", review = false }: { tone?: Tone; review?: boolean } = {}
+  { tone = "executive", review = false, language }: { tone?: Tone; review?: boolean; language?: string } = {}
 ): Promise<MoM> {
   if (!process.env.ANTHROPIC_API_KEY) {
     throw new Error("ANTHROPIC_API_KEY is not set in the environment");
@@ -185,7 +185,12 @@ export async function extractMinutes(
       input_schema: MOM_SCHEMA,
     }],
     tool_choice: { type: "tool", name: "submit_minutes" },
-    messages: [{ role: "user", content: `=== TRANSCRIPT ===\n${transcript}\n=== END TRANSCRIPT ===` }],
+    messages: [{
+      role: "user",
+      content:
+        (language ? `Detected primary language: **${language}**. Write ALL output in this language (titles, summaries, topics, decisions, actions, risks, questions).\n\n` : "") +
+        `=== TRANSCRIPT ===\n${transcript}\n=== END TRANSCRIPT ===`,
+    }],
   });
 
   let mom: MoM | null = null;

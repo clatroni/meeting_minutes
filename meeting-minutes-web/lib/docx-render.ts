@@ -4,6 +4,7 @@ import {
   BorderStyle, ShadingType, PageOrientation,
 } from "docx";
 import type { MoM } from "./types";
+import { DEFAULT_TEMPLATE, type SectionConfig, type SectionKey } from "./template";
 
 const INK = "0A0A0A";
 const GREEN = "86BC25";
@@ -54,11 +55,11 @@ function statusColor(s: string) {
   return s === "Completed" ? "EEF7D9" : s === "In Progress" ? "EDF2FF" : "F5F4F0";
 }
 
-export async function renderDocx(mom: MoM): Promise<Buffer> {
+export async function renderDocx(mom: MoM, template: SectionConfig[] = DEFAULT_TEMPLATE): Promise<Buffer> {
   const info = mom.meeting_info;
   const children: (Paragraph | Table)[] = [];
 
-  // Title block
+  // Title block — always shown
   children.push(new Paragraph({
     spacing: { after: 100 },
     children: [new TextRun({
@@ -70,7 +71,7 @@ export async function renderDocx(mom: MoM): Promise<Buffer> {
   if (metaBits) children.push(body(metaBits, { muted: true }));
   if (info.objective) children.push(body(info.objective, { italic: true, muted: true }));
 
-  // Participants
+  // Participants — always shown
   if (info.participants?.length) {
     const names = info.participants.map(p => p.role ? `${p.name} (${p.role})` : p.name).join(", ");
     children.push(new Paragraph({
@@ -82,85 +83,65 @@ export async function renderDocx(mom: MoM): Promise<Buffer> {
     }));
   }
 
-  // Executive summary
-  children.push(heading("Executive summary"));
-  children.push(body(mom.executive_summary));
+  // Iterate sections in template order — respects enable/disable + rename
+  for (const section of template) {
+    if (!section.enabled) continue;
+    const key = section.key as SectionKey;
+    const title = section.title;
 
-  // Topics
-  if (mom.discussion_topics?.length) {
-    children.push(heading("Topics discussed"));
-    for (const t of mom.discussion_topics) {
-      children.push(bullet(t.summary, t.title));
+    if (key === "executive_summary" && mom.executive_summary) {
+      children.push(heading(title));
+      children.push(body(mom.executive_summary));
+    } else if (key === "discussion_topics" && mom.discussion_topics?.length) {
+      children.push(heading(title));
+      for (const t of mom.discussion_topics) children.push(bullet(t.summary, t.title));
+    } else if (key === "decisions_log" && mom.decisions_log?.length) {
+      children.push(heading(title));
+      for (const d of mom.decisions_log) {
+        const owner = d.owner ? ` (Owner: ${d.owner})` : "";
+        const rationale = d.rationale ? ` — ${d.rationale}` : "";
+        children.push(bullet(rationale + owner, d.decision));
+      }
+    } else if (key === "action_items" && mom.action_items?.length) {
+      children.push(heading(title));
+      const headerRow = new TableRow({
+        tableHeader: true,
+        children: ["Action", "Owner", "Due", "Priority", "Status"].map(h =>
+          tableCell(h, { bold: true, bg: INK, color: "FFFFFF" })),
+      });
+      const rows = mom.action_items.map(a => new TableRow({
+        children: [
+          tableCell(a.action),
+          tableCell(a.owner || "TBD"),
+          tableCell(a.due_date || "TBD"),
+          tableCell(a.priority, { bg: priorityColor(a.priority) }),
+          tableCell(a.status, { bg: statusColor(a.status) }),
+        ],
+      }));
+      children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [headerRow, ...rows] }));
+    } else if (key === "risks_issues" && mom.risks_issues?.length) {
+      children.push(heading(title));
+      const headerRow = new TableRow({
+        tableHeader: true,
+        children: ["Type", "Description", "Impact", "Owner"].map(h =>
+          tableCell(h, { bold: true, bg: INK, color: "FFFFFF" })),
+      });
+      const rows = mom.risks_issues.map(r => new TableRow({
+        children: [
+          tableCell(r.type, { bg: r.type === "Issue" ? "FEF0F0" : "FEF5E4" }),
+          tableCell(r.description),
+          tableCell(r.impact, { bg: priorityColor(r.impact) }),
+          tableCell(r.owner || "TBD"),
+        ],
+      }));
+      children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [headerRow, ...rows] }));
+    } else if (key === "timeline" && mom.timeline?.length) {
+      children.push(heading(title));
+      for (const t of mom.timeline) children.push(bullet(t.date, t.milestone));
+    } else if (key === "open_questions" && mom.open_questions?.length) {
+      children.push(heading(title));
+      for (const q of mom.open_questions) children.push(bullet(q));
     }
-  }
-
-  // Decisions
-  if (mom.decisions_log?.length) {
-    children.push(heading("Decisions"));
-    for (const d of mom.decisions_log) {
-      const owner = d.owner ? ` (Owner: ${d.owner})` : "";
-      const rationale = d.rationale ? ` — ${d.rationale}` : "";
-      children.push(bullet(rationale + owner, d.decision));
-    }
-  }
-
-  // Action items table
-  if (mom.action_items?.length) {
-    children.push(heading("Action items"));
-    const headerRow = new TableRow({
-      tableHeader: true,
-      children: ["Action", "Owner", "Due", "Priority", "Status"].map(h =>
-        tableCell(h, { bold: true, bg: INK, color: "FFFFFF" })),
-    });
-    const rows = mom.action_items.map(a => new TableRow({
-      children: [
-        tableCell(a.action),
-        tableCell(a.owner || "TBD"),
-        tableCell(a.due_date || "TBD"),
-        tableCell(a.priority, { bg: priorityColor(a.priority) }),
-        tableCell(a.status, { bg: statusColor(a.status) }),
-      ],
-    }));
-    children.push(new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      rows: [headerRow, ...rows],
-    }));
-  }
-
-  // Risks & issues
-  if (mom.risks_issues?.length) {
-    children.push(heading("Risks & issues"));
-    const headerRow = new TableRow({
-      tableHeader: true,
-      children: ["Type", "Description", "Impact", "Owner"].map(h =>
-        tableCell(h, { bold: true, bg: INK, color: "FFFFFF" })),
-    });
-    const rows = mom.risks_issues.map(r => new TableRow({
-      children: [
-        tableCell(r.type, { bg: r.type === "Issue" ? "FEF0F0" : "FEF5E4" }),
-        tableCell(r.description),
-        tableCell(r.impact, { bg: priorityColor(r.impact) }),
-        tableCell(r.owner || "TBD"),
-      ],
-    }));
-    children.push(new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      rows: [headerRow, ...rows],
-    }));
-  }
-
-  // Timeline
-  if (mom.timeline?.length) {
-    children.push(heading("Timeline"));
-    for (const t of mom.timeline) {
-      children.push(bullet(t.date, t.milestone));
-    }
-  }
-
-  // Open questions
-  if (mom.open_questions?.length) {
-    children.push(heading("Open questions"));
-    for (const q of mom.open_questions) children.push(bullet(q));
   }
 
   // Footer line

@@ -5,7 +5,9 @@ import { SAMPLE_TRANSCRIPTS } from "@/lib/samples";
 import { MOM_RULES } from "@/lib/rules";
 import { detectLanguage } from "@/lib/lang";
 import { momToMarkdown } from "@/lib/mom-to-markdown";
-import type { MoM } from "@/lib/types";
+import { EditableText, EditableTextarea, EditableSelect, RemoveButton, AddButton } from "@/lib/editable";
+import { DEFAULT_TEMPLATE, loadTemplate, saveTemplate, resetTemplate, titleFor, isEnabled, type SectionConfig, type SectionKey } from "@/lib/template";
+import type { MoM, ActionItem, Decision, DiscussionTopic, Risk, TimelineEntry, Participant } from "@/lib/types";
 
 type Tone = "executive" | "detailed" | "casual";
 
@@ -17,13 +19,6 @@ const PIPELINE_STEPS_SINGLE = [
   { label: "Extracting decisions & actions" },
   { label: "Polishing for executive review" },
 ];
-const PIPELINE_STEPS_REVIEW = [
-  { label: "Reading transcript" },
-  { label: "First extraction pass" },
-  { label: "Quality review — fixing missed actions" },
-  { label: "Polishing for executive review" },
-  { label: "Finalising" },
-];
 
 export default function Home() {
   const [staged, setStaged] = useState<Staged | null>(null);
@@ -33,18 +28,28 @@ export default function Home() {
   const [mom, setMom] = useState<MoM | null>(null);
   const [step, setStep] = useState(0);
   const [dragging, setDragging] = useState(false);
-  const [tone, setTone] = useState<Tone>("executive");
-  const [review, setReview] = useState(false);
   const [showRules, setShowRules] = useState(false);
   const [showTemplate, setShowTemplate] = useState(false);
+  const [template, setTemplate] = useState<SectionConfig[]>(DEFAULT_TEMPLATE);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // Hydrate template from localStorage on mount
+  useEffect(() => { setTemplate(loadTemplate()); }, []);
+  function updateTemplate(next: SectionConfig[]) {
+    setTemplate(next);
+    saveTemplate(next);
+  }
+  function doResetTemplate() {
+    resetTemplate();
+    setTemplate(DEFAULT_TEMPLATE);
+  }
 
   useEffect(() => {
     if (!busy) { setStep(0); return; }
-    const timings = review ? [600, 6000, 18000, 32000] : [800, 6000, 14000];
+    const timings = [800, 6000, 14000];
     const timers = timings.map((ms, i) => setTimeout(() => setStep(i + 1), ms));
     return () => timers.forEach(clearTimeout);
-  }, [busy, review]);
+  }, [busy]);
 
   const lang = useMemo(() => staged ? detectLanguage(staged.text) : null, [staged]);
 
@@ -73,11 +78,15 @@ export default function Home() {
   async function generate() {
     if (!staged) return;
     setBusy(true); setError(null);
+    const detected = detectLanguage(staged.text);
+    const langForPrompt = detected.code === "el" ? "Greek (Ελληνικά)"
+      : detected.code === "en" ? "English"
+      : "Mixed Greek + English (use the dominant language)";
     try {
       const res = await fetch("/api/process", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: staged.text, tone, review }),
+        body: JSON.stringify({ text: staged.text, tone: "executive", language: langForPrompt }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Request failed");
@@ -110,10 +119,7 @@ export default function Home() {
         {showLanding && (
           <>
             <HowItWorks />
-            <OutputChips />
             <Settings
-              tone={tone} setTone={setTone}
-              review={review} setReview={setReview}
               onShowRules={() => setShowRules(true)}
               onShowTemplate={() => setShowTemplate(true)}
             />
@@ -145,8 +151,6 @@ export default function Home() {
             staged={staged}
             lang={lang}
             onChange={(text) => setStaged({ ...staged, text })}
-            tone={tone} setTone={setTone}
-            review={review} setReview={setReview}
             onShowRules={() => setShowRules(true)}
             onShowTemplate={() => setShowTemplate(true)}
             onCancel={reset}
@@ -154,7 +158,7 @@ export default function Home() {
           />
         )}
 
-        {busy && <Processing step={step} review={review} />}
+        {busy && <Processing step={step} />}
 
         {error && (
           <div className="bg-red-l text-red-d rounded-[var(--radius-md)] p-5 mt-8 fade-up">
@@ -162,7 +166,7 @@ export default function Home() {
           </div>
         )}
 
-        {mom && <ResultView mom={mom} onReset={reset} />}
+        {mom && <ResultView mom={mom} onReset={reset} template={template} />}
       </main>
       <Footer />
 
@@ -175,9 +179,11 @@ export default function Home() {
         </div>
       </Modal>}
 
-      {showTemplate && <Modal title="Output template (Word .docx structure)" onClose={() => setShowTemplate(false)}>
-        <TemplatePreview />
-      </Modal>}
+      {showTemplate && (
+        <Modal title="Output template — sections to include" onClose={() => setShowTemplate(false)}>
+          <TemplateEditor template={template} onChange={updateTemplate} onReset={doResetTemplate} />
+        </Modal>
+      )}
     </>
   );
 }
@@ -240,59 +246,13 @@ function HowItWorks() {
   );
 }
 
-function OutputChips() {
-  const chips = ["Executive summary", "Decisions", "Action items", "Risks & issues", "Timeline", "Open questions", ".docx export"];
-  return (
-    <div className="mt-6 flex flex-wrap gap-2 fade-up">
-      <span className="text-[11px] uppercase tracking-widest text-ink/40 font-medium self-center pr-2">What you get</span>
-      {chips.map(c => (
-        <span key={c} className="text-xs bg-white px-3 py-1.5 rounded-full shadow-[var(--shadow-sm)]">
-          {c}
-        </span>
-      ))}
-    </div>
-  );
-}
-
-function Settings({ tone, setTone, review, setReview, onShowRules, onShowTemplate }: {
-  tone: Tone; setTone: (t: Tone) => void;
-  review: boolean; setReview: (b: boolean) => void;
+function Settings({ onShowRules, onShowTemplate }: {
   onShowRules: () => void; onShowTemplate: () => void;
 }) {
   return (
-    <div className="mt-8 bg-white rounded-[var(--radius-lg)] shadow-[var(--shadow-sm)] px-6 py-4 flex flex-wrap items-center gap-x-6 gap-y-3 fade-up">
-      <div className="flex items-center gap-3">
-        <span className="text-[11px] uppercase tracking-widest text-ink/50 font-medium">Tone</span>
-        <div className="inline-flex rounded-full bg-paper p-1">
-          {(["executive", "detailed", "casual"] as Tone[]).map(t => (
-            <button
-              key={t}
-              type="button"
-              onClick={() => setTone(t)}
-              className={`text-xs px-3 py-1.5 rounded-full transition-colors capitalize ${
-                tone === t ? "bg-ink text-white" : "text-ink/65 hover:text-ink"
-              }`}
-            >
-              {t}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <label className="flex items-center gap-3 cursor-pointer">
-        <span className="text-[11px] uppercase tracking-widest text-ink/50 font-medium">Review pass</span>
-        <button
-          type="button"
-          onClick={() => setReview(!review)}
-          className={`relative w-11 h-6 rounded-full transition-colors ${review ? "bg-green" : "bg-ink/15"}`}
-          aria-pressed={review}
-          title="Second Claude pass auditing the extraction — ~30s extra. Catches missed actions, mis-classified statuses."
-        >
-          <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-transform ${review ? "translate-x-5" : "translate-x-0.5"}`} />
-        </button>
-      </label>
-
-      <div className="flex items-center gap-2 ml-auto">
+    <div className="mt-8 bg-white rounded-[var(--radius-lg)] shadow-[var(--shadow-sm)] px-6 py-4 flex flex-wrap items-center justify-between gap-x-6 gap-y-3 fade-up">
+      <span className="text-xs text-ink/55">Output is tuned for senior stakeholders — concise executive prose.</span>
+      <div className="flex items-center gap-2">
         <button onClick={onShowRules} className="text-xs px-3 py-1.5 rounded-full bg-paper hover:bg-green-l transition-colors">📖 Rules</button>
         <button onClick={onShowTemplate} className="text-xs px-3 py-1.5 rounded-full bg-paper hover:bg-green-l transition-colors">📄 Template</button>
       </div>
@@ -354,13 +314,11 @@ function SampleCards({ onPick }: { onPick: (key: string) => void }) {
   );
 }
 
-function StagedPreview({ staged, lang, onChange, tone, setTone, review, setReview,
+function StagedPreview({ staged, lang, onChange,
                        onShowRules, onShowTemplate, onCancel, onGenerate }: {
   staged: Staged;
   lang: ReturnType<typeof detectLanguage>;
   onChange: (text: string) => void;
-  tone: Tone; setTone: (t: Tone) => void;
-  review: boolean; setReview: (b: boolean) => void;
   onShowRules: () => void; onShowTemplate: () => void;
   onCancel: () => void; onGenerate: () => void;
 }) {
@@ -393,25 +351,6 @@ function StagedPreview({ staged, lang, onChange, tone, setTone, review, setRevie
       </div>
 
       <div className="bg-white rounded-[var(--radius-lg)] shadow-[var(--shadow-sm)] px-6 py-4 flex flex-wrap items-center gap-x-6 gap-y-3">
-        <div className="flex items-center gap-3">
-          <span className="text-[11px] uppercase tracking-widest text-ink/50 font-medium">Tone</span>
-          <div className="inline-flex rounded-full bg-paper p-1">
-            {(["executive", "detailed", "casual"] as Tone[]).map(t => (
-              <button key={t} type="button" onClick={() => setTone(t)}
-                className={`text-xs px-3 py-1.5 rounded-full transition-colors capitalize ${tone === t ? "bg-ink text-white" : "text-ink/65 hover:text-ink"}`}>
-                {t}
-              </button>
-            ))}
-          </div>
-        </div>
-        <label className="flex items-center gap-3 cursor-pointer">
-          <span className="text-[11px] uppercase tracking-widest text-ink/50 font-medium">Review pass</span>
-          <button type="button" onClick={() => setReview(!review)}
-            className={`relative w-11 h-6 rounded-full transition-colors ${review ? "bg-green" : "bg-ink/15"}`}
-            aria-pressed={review}>
-            <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-transform ${review ? "translate-x-5" : "translate-x-0.5"}`} />
-          </button>
-        </label>
         <div className="flex items-center gap-2">
           <button onClick={onShowRules} className="text-xs px-3 py-1.5 rounded-full bg-paper hover:bg-green-l transition-colors">📖 Rules</button>
           <button onClick={onShowTemplate} className="text-xs px-3 py-1.5 rounded-full bg-paper hover:bg-green-l transition-colors">📄 Template</button>
@@ -427,8 +366,8 @@ function StagedPreview({ staged, lang, onChange, tone, setTone, review, setRevie
   );
 }
 
-function Processing({ step, review }: { step: number; review: boolean }) {
-  const steps = review ? PIPELINE_STEPS_REVIEW : PIPELINE_STEPS_SINGLE;
+function Processing({ step }: { step: number }) {
+  const steps = PIPELINE_STEPS_SINGLE;
   return (
     <div className="bg-white rounded-[var(--radius-lg)] shadow-[var(--shadow-md)] p-10 mt-8 fade-up">
       <div className="flex items-center gap-3 mb-6">
@@ -453,18 +392,52 @@ function Processing({ step, review }: { step: number; review: boolean }) {
           );
         })}
       </ol>
-      <p className="text-xs text-ink/50 mt-6">
-        {review ? "Typically 50–80 seconds with review pass. " : "Typically 30–45 seconds. "}
-        Powered by Claude Sonnet 4.6.
-      </p>
+      <p className="text-xs text-ink/50 mt-6">Typically 30–45 seconds. Powered by Claude Sonnet 4.6.</p>
     </div>
   );
 }
 
-function ResultView({ mom, onReset }: { mom: MoM; onReset: () => void }) {
+function ResultView({ mom: initialMom, onReset, template }: { mom: MoM; onReset: () => void; template: SectionConfig[] }) {
+  const [mom, setMom] = useState<MoM>(initialMom);
   const [downloading, setDownloading] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [edited, setEdited] = useState(false);
+  const generatedAt = useMemo(() => new Date().toLocaleString(), [initialMom]);
+
+  // Sync if a new extraction arrives
+  useEffect(() => { setMom(initialMom); setEdited(false); }, [initialMom]);
+
+  function restoreOriginal() {
+    setMom(initialMom);
+    setEdited(false);
+  }
+
   const info = mom.meeting_info;
+
+  function update(patch: (m: MoM) => MoM) {
+    setMom(prev => patch(prev));
+    setEdited(true);
+  }
+  function updateInfo<K extends keyof typeof info>(key: K, value: (typeof info)[K]) {
+    update(m => ({ ...m, meeting_info: { ...m.meeting_info, [key]: value } }));
+  }
+  function updateArray<T>(key: keyof MoM, idx: number, patch: Partial<T>) {
+    update(m => {
+      const arr = (m[key] as T[] | undefined) || [];
+      const next = [...arr];
+      next[idx] = { ...next[idx], ...patch };
+      return { ...m, [key]: next };
+    });
+  }
+  function addRow<T>(key: keyof MoM, blank: T) {
+    update(m => ({ ...m, [key]: [...(((m[key] as T[]) || [])), blank] }));
+  }
+  function removeRow(key: keyof MoM, idx: number) {
+    update(m => {
+      const arr = (m[key] as unknown[] | undefined) || [];
+      return { ...m, [key]: arr.filter((_, i) => i !== idx) };
+    });
+  }
 
   const baseName = (() => {
     const slug = (info.title || "MoM").replace(/[^A-Za-z0-9-_]+/g, "_").slice(0, 60);
@@ -484,7 +457,7 @@ function ResultView({ mom, onReset }: { mom: MoM; onReset: () => void }) {
     try {
       const res = await fetch("/api/render-docx", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mom }),
+        body: JSON.stringify({ mom, template }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: "Render failed" }));
@@ -503,7 +476,7 @@ function ResultView({ mom, onReset }: { mom: MoM; onReset: () => void }) {
 
   async function copyMarkdown() {
     try {
-      const md = momToMarkdown(mom);
+      const md = momToMarkdown(mom, template);
       await navigator.clipboard.writeText(md);
       setCopied(true);
       setTimeout(() => setCopied(false), 2200);
@@ -515,7 +488,14 @@ function ResultView({ mom, onReset }: { mom: MoM; onReset: () => void }) {
   return (
     <div className="space-y-6 fade-up mt-8">
       <div className="flex items-center justify-between mb-2 gap-3 flex-wrap">
-        <div className="text-xs text-ink/50 mono uppercase tracking-widest">Generated {new Date().toLocaleString()}</div>
+        <div className="text-xs text-ink/50 mono uppercase tracking-widest flex items-center gap-2">
+          Generated {generatedAt}
+          {edited && (
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-l text-amber normal-case tracking-normal">
+              ✎ Edited locally
+            </span>
+          )}
+        </div>
         <div className="flex gap-2 flex-wrap">
           <button onClick={downloadDocx} disabled={downloading}
             className="text-sm px-5 py-2 rounded-full bg-green text-white hover:bg-green-d transition-colors disabled:opacity-60 flex items-center gap-2">
@@ -531,123 +511,232 @@ function ResultView({ mom, onReset }: { mom: MoM; onReset: () => void }) {
             title="Download the raw MoM JSON — for downstream automation">
             ↓ .json
           </button>
+          {edited && (
+            <button onClick={restoreOriginal}
+              className="text-sm px-4 py-2 rounded-full bg-amber-l text-amber-d hover:bg-amber hover:text-white transition-colors"
+              title="Discard local edits and restore the original Claude output">
+              ↺ Restore Claude output
+            </button>
+          )}
           <button onClick={onReset} className="text-sm px-4 py-2 rounded-full bg-white hover:bg-ink hover:text-paper transition-colors">↻ New</button>
         </div>
       </div>
 
+      <div className="bg-green-l/60 text-green-d rounded-[var(--radius-md)] px-4 py-2.5 text-sm flex items-center gap-2 fade-up">
+        <span className="text-base">✎</span>
+        <span>
+          <strong className="font-medium">Tip:</strong> Click any underlined text to edit it. Your edits flow into the .docx, Markdown, and JSON exports.
+        </span>
+      </div>
+
       <section className="bg-white rounded-[var(--radius-lg)] shadow-[var(--shadow-md)] p-8">
-        <h2 className="display text-4xl leading-tight mb-2">{info.title}</h2>
-        <div className="text-sm text-ink/55 mono mb-4 flex flex-wrap gap-2">
-          {[info.date, info.duration, info.client_name].filter(Boolean).map((bit, i) => (
-            <span key={i} className="after:content-['·'] after:ml-2 last:after:content-none">{bit}</span>
-          ))}
+        <div className="flex items-start justify-between gap-3 mb-2">
+          <h2 className="display text-4xl leading-tight">
+            <EditableText value={info.title} onChange={(v) => updateInfo("title", v)} placeholder="Untitled meeting" />
+          </h2>
+          {info.language && (
+            <span className="text-xs px-3 py-1.5 rounded-full bg-green-l text-green-d shrink-0 whitespace-nowrap">
+              {/Ελλ|Greek/i.test(info.language) ? "🇬🇷 " : /English/i.test(info.language) ? "🇬🇧 " : "🌐 "}
+              {info.language}
+            </span>
+          )}
         </div>
-        {info.objective && <p className="text-sm text-ink/70 italic mb-5 max-w-3xl">{info.objective}</p>}
-        <div className="flex flex-wrap gap-2">
+        <div className="text-sm text-ink/55 mono mb-4 flex flex-wrap gap-3 items-center">
+          <span className="flex items-center gap-1"><span className="text-[10px] uppercase tracking-widest opacity-50">Date</span>
+            <EditableText value={info.date} onChange={(v) => updateInfo("date", v)} placeholder="—" /></span>
+          <span className="text-ink/20">·</span>
+          <span className="flex items-center gap-1"><span className="text-[10px] uppercase tracking-widest opacity-50">Duration</span>
+            <EditableText value={info.duration} onChange={(v) => updateInfo("duration", v)} placeholder="—" /></span>
+          <span className="text-ink/20">·</span>
+          <span className="flex items-center gap-1"><span className="text-[10px] uppercase tracking-widest opacity-50">Client</span>
+            <EditableText value={info.client_name} onChange={(v) => updateInfo("client_name", v)} placeholder="—" /></span>
+        </div>
+        <p className="text-sm text-ink/70 italic mb-5 max-w-3xl">
+          <EditableTextarea value={info.objective} onChange={(v) => updateInfo("objective", v)} placeholder="Add meeting objective…" rows={2} />
+        </p>
+        <div className="flex flex-wrap gap-2 items-center">
           {info.participants.map((p, i) => (
-            <span key={i} className="text-xs bg-paper px-3 py-1.5 rounded-full">
-              <span className="font-medium">{p.name}</span>
-              {p.role && <span className="text-ink/55"> · {p.role}</span>}
+            <span key={i} className="text-xs bg-paper px-3 py-1.5 rounded-full flex items-center gap-2">
+              <EditableText value={p.name} onChange={(v) => updateInfo("participants",
+                info.participants.map((pp, j) => j === i ? { ...pp, name: v } : pp))} className="font-medium" />
+              <span className="text-ink/40">·</span>
+              <EditableText value={p.role} onChange={(v) => updateInfo("participants",
+                info.participants.map((pp, j) => j === i ? { ...pp, role: v } : pp))} className="text-ink/55" placeholder="role" />
+              <RemoveButton onClick={() => updateInfo("participants", info.participants.filter((_, j) => j !== i))} />
             </span>
           ))}
+          <button
+            onClick={() => updateInfo("participants", [...info.participants, { name: "New attendee", role: "" }])}
+            className="text-xs px-3 py-1.5 rounded-full bg-paper hover:bg-green-l text-ink/65 hover:text-green-d transition-colors"
+          >
+            + Add participant
+          </button>
         </div>
       </section>
 
-      <SectionCard title="Executive summary"><p className="leading-relaxed text-[15px]">{mom.executive_summary}</p></SectionCard>
+      {isEnabled(template, "executive_summary") && <SectionCard title={titleFor(template, "executive_summary")}>
+        <div className="leading-relaxed text-[15px]">
+          <EditableTextarea value={mom.executive_summary}
+            onChange={(v) => update(m => ({ ...m, executive_summary: v }))}
+            placeholder="Add executive summary…" rows={6} />
+        </div>
+      </SectionCard>}
 
-      {mom.discussion_topics?.length > 0 && (
-        <SectionCard title={`Topics discussed · ${mom.discussion_topics.length}`}>
-          <ul className="space-y-4">
-            {mom.discussion_topics.map((t, i) => (
-              <li key={i} className="pl-4 border-l-2 border-green/40">
-                <div className="font-medium mb-1">{t.title}</div>
-                <div className="text-sm text-ink/70 leading-relaxed">{t.summary}</div>
-              </li>
-            ))}
-          </ul>
-        </SectionCard>
-      )}
-
-      {mom.decisions_log?.length > 0 && (
-        <SectionCard title={`Decisions · ${mom.decisions_log.length}`}>
-          <ul className="space-y-4">
-            {mom.decisions_log.map((d, i) => (
-              <li key={i}>
-                <div className="font-medium leading-snug">{d.decision}</div>
-                {d.rationale && <div className="text-sm text-ink/60 italic mt-1">{d.rationale}</div>}
-                {d.owner && <div className="text-xs text-ink/50 mono mt-1.5">Owner · {d.owner}</div>}
-              </li>
-            ))}
-          </ul>
-        </SectionCard>
-      )}
-
-      {mom.action_items?.length > 0 && (
-        <SectionCard title={`Action items · ${mom.action_items.length}`}>
-          <div className="overflow-x-auto -mx-2">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-[11px] uppercase tracking-widest text-ink/40">
-                  <th className="pb-3 pr-3 font-medium">Action</th>
-                  <th className="pb-3 pr-3 font-medium">Owner</th>
-                  <th className="pb-3 pr-3 font-medium">Due</th>
-                  <th className="pb-3 pr-3 font-medium">Priority</th>
-                  <th className="pb-3 font-medium">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {mom.action_items.map((a, i) => (
-                  <tr key={i} className="border-t border-paper align-top">
-                    <td className="py-4 pr-3">{a.action}</td>
-                    <td className="py-4 pr-3 whitespace-nowrap font-medium">{a.owner}</td>
-                    <td className="py-4 pr-3 whitespace-nowrap text-ink/60 mono text-xs">{a.due_date}</td>
-                    <td className="py-4 pr-3"><PriorityBadge p={a.priority} /></td>
-                    <td className="py-4"><StatusBadge s={a.status} /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </SectionCard>
-      )}
-
-      {mom.risks_issues && mom.risks_issues.length > 0 && (
-        <SectionCard title={`Risks & issues · ${mom.risks_issues.length}`}>
-          <ul className="space-y-4">
-            {mom.risks_issues.map((r, i) => (
-              <li key={i} className="flex gap-4">
-                <span className={`text-[11px] px-2.5 py-1 rounded-full shrink-0 h-fit uppercase tracking-wider whitespace-nowrap
-                  ${r.type === "Risk" ? "bg-amber-l text-amber" : "bg-red-l text-red"}`}>{r.type} · {r.impact}</span>
-                <div className="flex-1">
-                  <div className="text-[15px] leading-relaxed">{r.description}</div>
-                  {r.owner && <div className="text-xs text-ink/50 mono mt-1">Owner · {r.owner}</div>}
+      {isEnabled(template, "discussion_topics") && <SectionCard title={`${titleFor(template, "discussion_topics")} · ${mom.discussion_topics?.length || 0}`}>
+        <ul className="space-y-4">
+          {(mom.discussion_topics || []).map((t, i) => (
+            <li key={i} className="pl-4 border-l-2 border-green/40 flex gap-3 items-start group">
+              <div className="flex-1">
+                <div className="font-medium mb-1">
+                  <EditableText value={t.title} onChange={(v) => updateArray<DiscussionTopic>("discussion_topics", i, { title: v })} placeholder="Topic title" />
                 </div>
-              </li>
-            ))}
-          </ul>
-        </SectionCard>
-      )}
+                <div className="text-sm text-ink/70 leading-relaxed">
+                  <EditableTextarea value={t.summary} onChange={(v) => updateArray<DiscussionTopic>("discussion_topics", i, { summary: v })} placeholder="Topic summary" rows={2} />
+                </div>
+              </div>
+              <RemoveButton onClick={() => removeRow("discussion_topics", i)} />
+            </li>
+          ))}
+        </ul>
+        <AddButton onClick={() => addRow<DiscussionTopic>("discussion_topics", { title: "New topic", summary: "" })} label="Add topic" />
+      </SectionCard>}
 
-      {mom.timeline && mom.timeline.length > 0 && (
-        <SectionCard title={`Timeline · ${mom.timeline.length}`}>
-          <ul className="space-y-1 text-sm">
-            {mom.timeline.map((t, i) => (
-              <li key={i} className="flex items-baseline justify-between gap-4 py-2.5 border-t border-paper first:border-t-0">
-                <span className="flex-1">{t.milestone}</span>
-                <span className="mono text-xs text-ink/60 whitespace-nowrap">{t.date}</span>
-              </li>
-            ))}
-          </ul>
-        </SectionCard>
-      )}
+      {isEnabled(template, "decisions_log") && <SectionCard title={`${titleFor(template, "decisions_log")} · ${mom.decisions_log?.length || 0}`}>
+        <ul className="space-y-4">
+          {(mom.decisions_log || []).map((d, i) => (
+            <li key={i} className="flex gap-3 items-start group">
+              <div className="flex-1">
+                <div className="font-medium leading-snug">
+                  <EditableText value={d.decision} onChange={(v) => updateArray<Decision>("decisions_log", i, { decision: v })} placeholder="Decision text" />
+                </div>
+                <div className="text-sm text-ink/60 italic mt-1">
+                  <EditableText value={d.rationale} onChange={(v) => updateArray<Decision>("decisions_log", i, { rationale: v })} placeholder="Add rationale…" />
+                </div>
+                <div className="text-xs text-ink/50 mono mt-1.5">
+                  Owner ·{" "}
+                  <EditableText value={d.owner} onChange={(v) => updateArray<Decision>("decisions_log", i, { owner: v })} placeholder="TBD" />
+                </div>
+              </div>
+              <RemoveButton onClick={() => removeRow("decisions_log", i)} />
+            </li>
+          ))}
+        </ul>
+        <AddButton onClick={() => addRow<Decision>("decisions_log", { decision: "New decision", rationale: "", owner: "" })} label="Add decision" />
+      </SectionCard>}
 
-      {mom.open_questions && mom.open_questions.length > 0 && (
-        <SectionCard title={`Open questions · ${mom.open_questions.length}`}>
-          <ul className="space-y-2 list-disc pl-5 text-[15px] leading-relaxed">
-            {mom.open_questions.map((q, i) => <li key={i}>{q}</li>)}
-          </ul>
-        </SectionCard>
-      )}
+      {isEnabled(template, "action_items") && <SectionCard title={`${titleFor(template, "action_items")} · ${mom.action_items?.length || 0}`}>
+        <div className="overflow-x-auto -mx-2">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-[11px] uppercase tracking-widest text-ink/40">
+                <th className="pb-3 pr-3 font-medium">Action</th>
+                <th className="pb-3 pr-3 font-medium">Owner</th>
+                <th className="pb-3 pr-3 font-medium">Due</th>
+                <th className="pb-3 pr-3 font-medium">Priority</th>
+                <th className="pb-3 pr-3 font-medium">Status</th>
+                <th className="pb-3 font-medium"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {(mom.action_items || []).map((a, i) => (
+                <tr key={i} className="border-t border-paper align-top">
+                  <td className="py-4 pr-3">
+                    <EditableText value={a.action} onChange={(v) => updateArray<ActionItem>("action_items", i, { action: v })} placeholder="Action" />
+                  </td>
+                  <td className="py-4 pr-3 whitespace-nowrap font-medium">
+                    <EditableText value={a.owner} onChange={(v) => updateArray<ActionItem>("action_items", i, { owner: v })} placeholder="TBD" />
+                  </td>
+                  <td className="py-4 pr-3 whitespace-nowrap text-ink/60 mono text-xs">
+                    <EditableText value={a.due_date} onChange={(v) => updateArray<ActionItem>("action_items", i, { due_date: v })} placeholder="TBD" />
+                  </td>
+                  <td className="py-4 pr-3">
+                    <span className="inline-block">
+                      <EditableSelect
+                        value={a.priority}
+                        options={["High", "Medium", "Low"] as const}
+                        onChange={(v) => updateArray<ActionItem>("action_items", i, { priority: v })}
+                        className={`text-[11px] px-2 py-1 rounded-full uppercase tracking-wider ${a.priority === "High" ? "bg-red-l text-red" : a.priority === "Medium" ? "bg-amber-l text-amber" : "bg-paper text-ink/55"}`}
+                      />
+                    </span>
+                  </td>
+                  <td className="py-4 pr-3">
+                    <EditableSelect
+                      value={a.status}
+                      options={["Not Started", "In Progress", "Completed"] as const}
+                      onChange={(v) => updateArray<ActionItem>("action_items", i, { status: v })}
+                      className={`text-[11px] px-2 py-1 rounded-full uppercase tracking-wider whitespace-nowrap ${a.status === "Completed" ? "bg-green-l text-green-d" : a.status === "In Progress" ? "bg-blue-l text-blue" : "bg-paper text-ink/55"}`}
+                    />
+                  </td>
+                  <td className="py-4"><RemoveButton onClick={() => removeRow("action_items", i)} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <AddButton onClick={() => addRow<ActionItem>("action_items", { action: "New action", owner: "TBD", due_date: "TBD", priority: "Medium", status: "Not Started" })} label="Add action" />
+      </SectionCard>}
+
+      {isEnabled(template, "risks_issues") && <SectionCard title={`${titleFor(template, "risks_issues")} · ${mom.risks_issues?.length || 0}`}>
+        <ul className="space-y-4">
+          {(mom.risks_issues || []).map((r, i) => (
+            <li key={i} className="flex gap-4 items-start group">
+              <div className={`text-[11px] px-2 py-1 rounded-full shrink-0 h-fit uppercase tracking-wider whitespace-nowrap flex items-center gap-1
+                ${r.type === "Risk" ? "bg-amber-l text-amber" : "bg-red-l text-red"}`}>
+                <EditableSelect value={r.type} options={["Risk", "Issue"] as const}
+                  onChange={(v) => updateArray<Risk>("risks_issues", i, { type: v })} className="" />
+                <span>·</span>
+                <EditableSelect value={r.impact} options={["High", "Medium", "Low"] as const}
+                  onChange={(v) => updateArray<Risk>("risks_issues", i, { impact: v })} className="" />
+              </div>
+              <div className="flex-1">
+                <div className="text-[15px] leading-relaxed">
+                  <EditableTextarea value={r.description}
+                    onChange={(v) => updateArray<Risk>("risks_issues", i, { description: v })}
+                    placeholder="Risk / issue description" rows={2} />
+                </div>
+                <div className="text-xs text-ink/50 mono mt-1">
+                  Owner ·{" "}
+                  <EditableText value={r.owner} onChange={(v) => updateArray<Risk>("risks_issues", i, { owner: v })} placeholder="TBD" />
+                </div>
+              </div>
+              <RemoveButton onClick={() => removeRow("risks_issues", i)} />
+            </li>
+          ))}
+        </ul>
+        <AddButton onClick={() => addRow<Risk>("risks_issues", { type: "Risk", description: "New risk", impact: "Medium", owner: "" })} label="Add risk / issue" />
+      </SectionCard>}
+
+      {isEnabled(template, "timeline") && <SectionCard title={`${titleFor(template, "timeline")} · ${mom.timeline?.length || 0}`}>
+        <ul className="space-y-1 text-sm">
+          {(mom.timeline || []).map((t, i) => (
+            <li key={i} className="flex items-baseline justify-between gap-4 py-2.5 border-t border-paper first:border-t-0 group">
+              <span className="flex-1">
+                <EditableText value={t.milestone} onChange={(v) => updateArray<TimelineEntry>("timeline", i, { milestone: v })} placeholder="Milestone" />
+              </span>
+              <span className="mono text-xs text-ink/60 whitespace-nowrap flex items-center gap-2">
+                <EditableText value={t.date} onChange={(v) => updateArray<TimelineEntry>("timeline", i, { date: v })} placeholder="YYYY-MM-DD" />
+                <RemoveButton onClick={() => removeRow("timeline", i)} />
+              </span>
+            </li>
+          ))}
+        </ul>
+        <AddButton onClick={() => addRow<TimelineEntry>("timeline", { milestone: "New milestone", date: "" })} label="Add milestone" />
+      </SectionCard>}
+
+      {isEnabled(template, "open_questions") && <SectionCard title={`${titleFor(template, "open_questions")} · ${mom.open_questions?.length || 0}`}>
+        <ul className="space-y-2 text-[15px] leading-relaxed">
+          {(mom.open_questions || []).map((q, i) => (
+            <li key={i} className="flex gap-2 items-start group">
+              <span className="text-green-d">·</span>
+              <span className="flex-1">
+                <EditableTextarea value={q} onChange={(v) => update(m => ({ ...m, open_questions: (m.open_questions || []).map((qq, j) => j === i ? v : qq) }))} placeholder="Question" rows={1} />
+              </span>
+              <RemoveButton onClick={() => removeRow("open_questions", i)} />
+            </li>
+          ))}
+        </ul>
+        <AddButton onClick={() => update(m => ({ ...m, open_questions: [...(m.open_questions || []), "New question"] }))} label="Add question" />
+      </SectionCard>}
     </div>
   );
 }
@@ -694,41 +783,60 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
   );
 }
 
-function TemplatePreview() {
-  const sections = [
-    { name: "Title block", detail: "Meeting title in Georgia 22pt + date · duration · client (DM Mono small caps)" },
-    { name: "Participants", detail: "'Participants:' bold prefix + 'Name (Role)' comma-separated" },
-    { name: "Executive summary", detail: "Green-rule heading, then 4–8 prose sentences (Calibri 11)" },
-    { name: "Topics discussed", detail: "Bulleted list — bold topic title em-dash summary" },
-    { name: "Decisions", detail: "Bulleted — bold decision em-dash rationale (italic) + owner in parentheses" },
-    { name: "Action items (table)", detail: "4 columns: Action · Owner · Due · Priority · Status. Header row dark ink + white text. Priority/Status cells shaded by value." },
-    { name: "Risks & issues (table)", detail: "Type · Description · Impact · Owner. Type cell shaded by Risk (amber) vs Issue (red)." },
-    { name: "Timeline", detail: "Bulleted milestones — bold name em-dash date" },
-    { name: "Open questions", detail: "Bulleted list" },
-    { name: "Footer", detail: "Italic centred · 'Strictly Private & Confidential · Deloitte'" },
-  ];
+function TemplateEditor({ template, onChange, onReset }: {
+  template: SectionConfig[]; onChange: (next: SectionConfig[]) => void; onReset: () => void;
+}) {
+  function setRow(idx: number, patch: Partial<SectionConfig>) {
+    onChange(template.map((s, i) => i === idx ? { ...s, ...patch } : s));
+  }
+  function move(idx: number, dir: -1 | 1) {
+    const j = idx + dir;
+    if (j < 0 || j >= template.length) return;
+    const next = [...template];
+    [next[idx], next[j]] = [next[j], next[idx]];
+    onChange(next);
+  }
+  const enabledCount = template.filter(s => s.enabled).length;
   return (
     <div>
-      <p className="text-sm text-ink/70 mb-5">
-        The downloaded Word file follows this structure. Section ordering and styling match a typical
-        Deloitte client-facing MoM. Empty sections are omitted automatically.
+      <p className="text-sm text-ink/70 mb-4">
+        Customise which sections appear in the result and the downloaded Word document.
+        Saved to your browser (localStorage) — persists across runs.
       </p>
-      <ol className="space-y-3">
-        {sections.map((s, i) => (
-          <li key={i} className="flex gap-3 text-sm">
-            <span className="w-6 h-6 rounded-full bg-green-l text-green-d text-xs font-medium flex items-center justify-center shrink-0">{i + 1}</span>
-            <div>
-              <div className="font-medium">{s.name}</div>
-              <div className="text-ink/65 text-xs leading-relaxed">{s.detail}</div>
+      <div className="text-xs text-ink/55 mb-3 mono">{enabledCount} of {template.length} sections enabled</div>
+      <ul className="space-y-2">
+        {template.map((s, i) => (
+          <li key={s.key} className="flex items-center gap-3 bg-paper rounded-[var(--radius-md)] p-3">
+            <div className="flex flex-col gap-0.5">
+              <button onClick={() => move(i, -1)} disabled={i === 0}
+                className="w-5 h-5 rounded bg-white hover:bg-green-l text-xs text-ink/55 disabled:opacity-30">▲</button>
+              <button onClick={() => move(i, 1)} disabled={i === template.length - 1}
+                className="w-5 h-5 rounded bg-white hover:bg-green-l text-xs text-ink/55 disabled:opacity-30">▼</button>
             </div>
+            <button onClick={() => setRow(i, { enabled: !s.enabled })}
+              className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ${s.enabled ? "bg-green" : "bg-ink/15"}`}
+              aria-pressed={s.enabled}>
+              <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${s.enabled ? "translate-x-5" : "translate-x-0.5"}`} />
+            </button>
+            <input
+              type="text"
+              value={s.title}
+              onChange={(e) => setRow(i, { title: e.target.value })}
+              className={`flex-1 bg-white rounded px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-green/40 ${s.enabled ? "" : "opacity-40 line-through"}`}
+            />
+            <span className="text-[10px] text-ink/40 mono uppercase tracking-widest w-32 text-right shrink-0">{s.key}</span>
           </li>
         ))}
-      </ol>
-      <div className="mt-6 text-xs text-ink/55 bg-paper rounded-[var(--radius-sm)] p-4">
-        Local Streamlit tool: the visual styling is inherited from <span className="mono">input/Template.docx</span>
-        — editable in Word (fonts, colours, header/footer).
-        Vercel build: styling is defined in <span className="mono">lib/docx-render.ts</span> using the docx npm
-        package — editing requires a redeploy.
+      </ul>
+      <div className="mt-5 flex items-center justify-between text-xs text-ink/55">
+        <span>Click ▲▼ to reorder · toggle to enable · edit the title inline</span>
+        <button onClick={onReset} className="px-3 py-1.5 rounded-full bg-paper hover:bg-red-l hover:text-red-d transition-colors">
+          ↺ Reset to defaults
+        </button>
+      </div>
+      <div className="mt-4 text-xs text-ink/55 bg-paper rounded-[var(--radius-sm)] p-4">
+        Note: Claude always extracts the full set of sections. The template controls which are <em>shown</em> and
+        <em> exported</em> — enabling a section later won't re-extract it, but disabling and re-enabling is non-destructive.
       </div>
     </div>
   );

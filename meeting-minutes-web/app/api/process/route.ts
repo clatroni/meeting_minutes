@@ -13,6 +13,7 @@ export async function POST(req: NextRequest) {
     let transcript = "";
     let tone: Tone = "executive";
     let review = false;
+    let language: string | undefined;
 
     if (contentType.includes("multipart/form-data")) {
       const formData = await req.formData();
@@ -20,8 +21,10 @@ export async function POST(req: NextRequest) {
       const text = formData.get("text");
       const t = formData.get("tone");
       const r = formData.get("review");
+      const l = formData.get("language");
       if (typeof t === "string" && VALID_TONES.includes(t as Tone)) tone = t as Tone;
       if (typeof r === "string") review = r === "true" || r === "1";
+      if (typeof l === "string" && l) language = l;
 
       if (file instanceof File) {
         const ext = file.name.toLowerCase().split(".").pop();
@@ -42,6 +45,7 @@ export async function POST(req: NextRequest) {
       transcript = body.text || "";
       if (typeof body.tone === "string" && VALID_TONES.includes(body.tone as Tone)) tone = body.tone as Tone;
       if (typeof body.review === "boolean") review = body.review;
+      if (typeof body.language === "string" && body.language) language = body.language;
     }
 
     transcript = transcript.trim();
@@ -49,7 +53,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Empty transcript — upload a .docx/.txt file or paste text" }, { status: 400 });
     }
 
-    const mom = await extractMinutes(transcript, { tone, review });
+    const mom = await extractMinutes(transcript, { tone, review, language });
     return NextResponse.json({ mom });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Unknown error";
