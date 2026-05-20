@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useMemo } from "react";
 import { SAMPLE_TRANSCRIPTS } from "@/lib/samples";
 import { MOM_RULES } from "@/lib/rules";
 import { detectLanguage } from "@/lib/lang";
+import { momToMarkdown } from "@/lib/mom-to-markdown";
 import type { MoM } from "@/lib/types";
 
 type Tone = "executive" | "detailed" | "casual";
@@ -462,7 +463,21 @@ function Processing({ step, review }: { step: number; review: boolean }) {
 
 function ResultView({ mom, onReset }: { mom: MoM; onReset: () => void }) {
   const [downloading, setDownloading] = useState(false);
+  const [copied, setCopied] = useState(false);
   const info = mom.meeting_info;
+
+  const baseName = (() => {
+    const slug = (info.title || "MoM").replace(/[^A-Za-z0-9-_]+/g, "_").slice(0, 60);
+    return `${info.date || "MoM"}_${slug}_MoM`;
+  })();
+
+  function triggerDownload(blob: Blob, filename: string) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }
 
   async function downloadDocx() {
     setDownloading(true);
@@ -475,27 +490,46 @@ function ResultView({ mom, onReset }: { mom: MoM; onReset: () => void }) {
         const err = await res.json().catch(() => ({ error: "Render failed" }));
         throw new Error(err.error || "Render failed");
       }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      const slug = (info.title || "MoM").replace(/[^A-Za-z0-9-_]+/g, "_").slice(0, 60);
-      a.download = `${info.date || "MoM"}_${slug}_MoM.docx`;
-      document.body.appendChild(a); a.click(); a.remove();
-      URL.revokeObjectURL(url);
+      triggerDownload(await res.blob(), `${baseName}.docx`);
     } catch (e) {
       alert(e instanceof Error ? e.message : "Download failed");
     } finally { setDownloading(false); }
   }
 
+  function downloadJson() {
+    const blob = new Blob([JSON.stringify(mom, null, 2)], { type: "application/json" });
+    triggerDownload(blob, `${baseName}.json`);
+  }
+
+  async function copyMarkdown() {
+    try {
+      const md = momToMarkdown(mom);
+      await navigator.clipboard.writeText(md);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2200);
+    } catch {
+      alert("Clipboard copy failed — your browser may have blocked it.");
+    }
+  }
+
   return (
     <div className="space-y-6 fade-up mt-8">
-      <div className="flex items-center justify-between mb-2 gap-3">
+      <div className="flex items-center justify-between mb-2 gap-3 flex-wrap">
         <div className="text-xs text-ink/50 mono uppercase tracking-widest">Generated {new Date().toLocaleString()}</div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <button onClick={downloadDocx} disabled={downloading}
             className="text-sm px-5 py-2 rounded-full bg-green text-white hover:bg-green-d transition-colors disabled:opacity-60 flex items-center gap-2">
             {downloading ? <><span className="spinner !w-3.5 !h-3.5 !border-white/30 !border-t-white"></span> Building Word…</> : <>↓ Download .docx</>}
+          </button>
+          <button onClick={copyMarkdown}
+            className={`text-sm px-4 py-2 rounded-full transition-colors flex items-center gap-2 ${copied ? "bg-green-l text-green-d" : "bg-white hover:bg-paper"}`}
+            title="Copy the full MoM as Markdown — paste into Slack / Teams / email">
+            {copied ? <>✓ Copied</> : <>⎘ Copy as Markdown</>}
+          </button>
+          <button onClick={downloadJson}
+            className="text-sm px-4 py-2 rounded-full bg-white hover:bg-paper transition-colors"
+            title="Download the raw MoM JSON — for downstream automation">
+            ↓ .json
           </button>
           <button onClick={onReset} className="text-sm px-4 py-2 rounded-full bg-white hover:bg-ink hover:text-paper transition-colors">↻ New</button>
         </div>
